@@ -10,6 +10,7 @@ import datetime
 import platform
 import re
 
+version = 'v2.1'
 oldFilePath=u''
 nfileCount=1
 stype='file'
@@ -24,7 +25,7 @@ sys.setdefaultencoding( "utf-8" )
 
 class MyFrame(wx.Frame):
 	def __init__(self):
-		wx.Frame.__init__(self, None, -1, u"Part3", size = (550, 700))
+		wx.Frame.__init__(self, None, -1, u"Part3 " + version, size = (550, 700))
 		panel = wx.Panel(self, -1)
 
 		self.staticFileList=wx.StaticText(panel, -1, u"文件/文件夹：")
@@ -47,6 +48,8 @@ class MyFrame(wx.Frame):
 		self.videoHeight=wx.ComboBox(panel,-1,choices=self.videoHeightList,name='videoHeight')
 		self.constarinRatio=wx.CheckBox(panel,-1,u'保持宽高比')
 
+		self.firstFramePlay=wx.CheckBox(panel,-1,u'首帧播放')
+
 		self.staticProresQuality=wx.StaticText(panel,-1,u"质量：")
 		self.proresQualityList=[u'0: Proxy',u'1: LT',u'2: Normal',u'3: HQ']
 		self.proresQuality=wx.ComboBox(panel,-1,choices=self.proresQualityList)
@@ -63,7 +66,8 @@ class MyFrame(wx.Frame):
 
 		self.staticVideoExtra=wx.StaticText(panel,-1,u"额外参数：")
 		self.videoExtra=wx.TextCtrl(panel,-1,"")
-		self.videoExtra.SetToolTip(u'-r rate 帧率\n-vframes number 要转换的帧数量')
+		self.videoExtra.SetToolTip(u'-r rate 帧率\n-vframes number 要转换的帧数量\n-movflags +faststart 首帧播放')
+
 
 
 		self.staticAudio=wx.StaticText(panel,-1,u"音频：")
@@ -123,6 +127,7 @@ class MyFrame(wx.Frame):
 		vhBoxSize.Add(self.staticHeight,0,wx.LEFT|wx.ALIGN_CENTER,10)
 		vhBoxSize.Add(self.videoHeight,0,wx.LEFT|wx.ALIGN_CENTER,10)
 		vhBoxSize.Add(self.constarinRatio,0,wx.LEFT|wx.ALIGN_CENTER,10)
+		vhBoxSize.Add(self.firstFramePlay,0,wx.LEFT|wx.ALIGN_CENTER,10)
 
 		vhBoxPreset=wx.BoxSizer()
 		vhBoxPreset.Add(self.staticVideoCRF,0,wx.LEFT|wx.ALIGN_CENTER,10)
@@ -195,6 +200,7 @@ class MyFrame(wx.Frame):
 			self.SetIcon(icon)
 		except Exception as e:
 			pass
+
 
 def platformEncode(cmd):
 	sys_str = platform.system()
@@ -328,9 +334,11 @@ def getFileList(fileStr):
 			stype='file'
 			updateInfo(fileStr)
 		else:
-			fileList=[os.path.join(fileStr,file) for file in os.listdir(fileStr) if os.path.isfile(os.path.join(fileStr,file))]
+			fileList=[os.path.join(fileStr,file) for file in os.listdir(fileStr) \
+					if (os.path.isfile(os.path.join(fileStr,file)) and not file.startswith('.'))]
 			nfileCount=len(fileList)
 			stype='folder'
+			# print(fileList[0])
 			updateInfo(fileList[0])
 	
 	frame.fileCount.SetLabel(str(nfileCount)+u'个')
@@ -520,6 +528,9 @@ def updateCmd(event):
 	else:
 		cmd+=' -vn'
 
+	if frame.firstFramePlay.GetValue() == wx.CHK_CHECKED:
+		cmd += ' -movflags +faststart'
+
 	# audio enabled
 	if frame.audioEnabled.GetValue() == wx.CHK_CHECKED:
 		acodecStr=frame.audioEncoder.GetValue()
@@ -556,15 +567,51 @@ def updateCmd(event):
 		outFileName=findNextUsable(boverWrite,inputPath+'-converted','.'+outputExt)
 		cmd= cmd % ('',inputPathStr,outFileName)
 	else:
-		inputFiles='"'+os.path.join(inputPathStr,'*.*')+'"'	
 		outDir=os.path.join(inputPathStr,'converted')
 		outDir=findNextUsable(boverWrite,outDir,'')
 		# if not os.path.exists(outDir):
 		# 	os.mkdir(outDir)
 
-		outFileName=os.path.join(outDir,'%~ni.'+outputExt)
-		cmd= cmd % ('for %i in ('+inputFiles+') do ','%i',outFileName)
-		cmd='cmd /c mkdir "%s" & ' % outDir+cmd
+		sys_str = platform.system()
+		if sys_str == 'Windows':
+
+			# cmd /c mkdir "/Users/zhangrui/Desktop/test 123/converted" & for %i in 
+			# ("/Users/zhangrui/Desktop/test 123/*.*") do "/Users/zhangrui/Desktop/Part3-Mac/Part3-Src/res-mac/ffmpeg" 
+			# -hide_banner -i "%i" -vcodec copy -acodec copy "/Users/zhangrui/Desktop/test 123/converted/%~ni.MP4"
+			inputFiles='"'+os.path.join(inputPathStr,'*.*')+'"'	
+			outFileName=os.path.join(outDir,'%~ni.'+outputExt)
+			cmd= cmd % ('for %i in ('+inputFiles+') do ','%i',outFileName)
+			cmd='cmd /c mkdir "%s" & ' % outDir+cmd
+
+		# folder support on Mac
+		else:
+			# mkdir "/Users/zhangrui/Desktop/test 123/converted-1"; 
+			# input_dir="/Users/zhangrui/Desktop/test 123"; 
+			# output_dir="/Users/zhangrui/Desktop/test 123/converted-1"; 
+			# output_ext="MP4"; 
+			# for file in "$input_dir"/*; 
+			# do 
+			# 	# echo $file;
+			# 	basename=`(basename "$file")`;
+			# 	file_no_ext="${basename%.*}"; 
+			# 	if ! [ -f "$file" ];
+			#  	then 
+			#  		continue;
+			#  	fi; 
+			# 	echo $file_no_ext;
+			# 	echo $output_dir/$file_no_ext.$output_ext;
+			# done
+
+			cmd_prepare = 'input_dir="%s"; output_dir="%s"; output_ext="%s"; ' % (inputPathStr, outDir, outputExt)
+			cmd_prepare += 'for file in "$input_dir"/*; do basename=`(basename "$file")`; file_no_ext="${basename%.*}"; '
+			# cmd_prepare += 'if ! [ -f "$file" ] \n then \n continue \n fi; '
+			cmd_prepare += 'if ! [ -f "$file" ]; then continue; fi; '
+	
+			cmd = cmd % (cmd_prepare, '$file', '$output_dir/$file_no_ext.$output_ext')
+			cmd += '; done'
+			cmd = 'mkdir "%s"; ' % outDir + cmd
+
+
 
 	frame.cmdText.SetValue(cmd)
 	# print('updated cmd: '+ cmd)
@@ -573,7 +620,7 @@ def threadProc():
 
 	startTime=datetime.datetime.now()
 	
-	frame.btn.SetLabel(u'Stop!')
+	# frame.btn.SetLabel(u'Stop!')
 
 	# wait for ffmpeg to finish
 	global convertProc
@@ -585,17 +632,22 @@ def threadProc():
 	try:
 		if ret==0:
 			print(u'转换成功！')
-			wx.MessageBox(u'转换成功！用时%s' % str(endTime-startTime),caption='Part3',style=wx.OK)
+			# wx.MessageBox(u'转换成功！用时%s' % str(endTime-startTime),caption='Part3',style=wx.OK)
+			wx.CallAfter(wx.MessageBox, u'转换成功！用时%s' % str(endTime-startTime), caption='Part3', style = wx.OK)
 			
 		else:
 			print(u'错误代码:'+str(ret))
-			wx.MessageBox(u'错误代码:'+str(ret),u'转换失败',style=wx.OK)
+			# wx.MessageBox(u'错误代码:'+str(ret),u'转换失败',style=wx.OK)
+			wx.CallAfter(wx.MessageBox, u'错误代码:'+str(ret), u'转换失败', style = wx.OK)
 	except Exception as e:
 		pass
 
 
-	frame.progressBar.Hide()
-	frame.remainTime.Hide()
+	# frame.progressBar.Hide()
+	# frame.remainTime.Hide()
+	wx.CallAfter(frame.progressBar.SetValue, 0)
+	wx.CallAfter(frame.remainTime.SetLabel, u"剩余时间:")
+	
 	frame.btn.SetLabel(u'Go!')
 	updateCmd(None)
 
@@ -666,8 +718,11 @@ def progressProc():
 				seconds_remain = (seconds - second_progress) / speed 
 				time_remain = seconds2time(seconds_remain)
 				print(rate_str + '\t' + time_remain)
-				frame.progressBar.SetValue(int(rate))
-				frame.remainTime.SetLabel(rate_str + '   ' + u'剩余时间： ' + time_remain)
+				# should not update UI from background
+				# frame.progressBar.SetValue(int(rate))
+				# frame.remainTime.SetLabel(rate_str + '   ' + u'剩余时间： ' + time_remain)
+				wx.CallAfter(frame.remainTime.SetLabel, rate_str + '   ' + u'剩余时间： ' + time_remain)
+				wx.CallAfter(frame.progressBar.SetValue, int(rate))
 
 
 def command_output(convertProc):
@@ -698,23 +753,33 @@ def RunCmd(event):
 
 		cmd = platformEncode(cmd)
 
-		convertProc = subprocess.Popen(cmd, shell = True, stderr = subprocess.STDOUT, stdout = subprocess.PIPE, universal_newlines = True)
+		sys_str = platform.system()
+		shell = True
+		if sys_str == 'Windows':
+			shell = False
+
+		convertProc = subprocess.Popen(cmd, shell = shell, stderr = subprocess.STDOUT, stdout = subprocess.PIPE, universal_newlines = True)
 
 		waitThread=threading.Thread(target=threadProc)
 		waitThread.start()
+		frame.btn.SetLabel(u'Stop!')
 
 		progressThread=threading.Thread(target=progressProc)
 		progressThread.start()
 
-		frame.progressBar.SetValue(0)
-		frame.progressBar.Show()
-		frame.remainTime.Show()
+		wx.CallAfter(frame.progressBar.SetValue, 0)
+		wx.CallAfter(frame.remainTime.SetLabel, u"剩余时间:")
+
+		# frame.progressBar.Show()
+		# frame.remainTime.Show()
 
 	else:
 		frame.btn.SetLabel(u'Go!')
+		wx.CallAfter(frame.progressBar.SetValue, 0)
+		wx.CallAfter(frame.remainTime.SetLabel, u"剩余时间:")
+
 		updateCmd(None)
-		frame.progressBar.Hide()
-		frame.remainTime.Hide()
+
 		# kill the converter thread
 		convertProc.kill()
 	
@@ -757,7 +822,8 @@ def checkFormatCompat(event):
 
 
 	# disable h264/265 only options for other formats
-	h264_Widgets=[frame.staticVideoCRF,frame.staticVideoPreset,frame.staticVideoMaxRate,frame.staticVideoRateUnit,frame.videoCRF,frame.videoPreset,frame.videoMaxRate]
+	h264_Widgets=[frame.staticVideoCRF,frame.staticVideoPreset,frame.staticVideoMaxRate,\
+				frame.staticVideoRateUnit,frame.videoCRF,frame.videoPreset,frame.videoMaxRate]
 	if videoEncoder not in ['h264','libx265']:
 		for widget in h264_Widgets:
 			widget.Disable()
@@ -767,7 +833,7 @@ def checkFormatCompat(event):
 
 	# hide prores options when selected other codecs
 	prores_Widgets=[frame.staticProresQuality,frame.proresQuality]
-	if videoEncoder != 'prores':
+	if not videoEncoder == 'prores':
 		for widget in prores_Widgets:
 			widget.Hide()
 	else:
@@ -816,6 +882,7 @@ class MyFileDropTarget(wx.FileDropTarget):
 		self.window = window
 	def OnDropFiles(self, x, y, filenames):
 		self.window.fileText.SetValue(filenames[0])
+		return False
 
 		# for file in filenames:
 		# 	self.window.AppendText("\t%s\n" % file)
@@ -849,8 +916,10 @@ def locateResource(resourceName, resType = 'binary'):
 		bundle_dir = os.path.dirname(os.path.abspath(__file__))
 		if sys_str == 'Windows':
 			bundle_dir = os.path.join(bundle_dir, 'res-win')
-		else:
+		elif sys_str == 'Darwin':
 			bundle_dir = os.path.join(bundle_dir, 'res-mac')
+		else:
+			bundle_dir = os.path.join(bundle_dir, 'res-linux')
 
 	if sys_str == 'Windows':
 		if resType == 'binary' and not resourceName.endswith('.exe'):
@@ -858,8 +927,7 @@ def locateResource(resourceName, resType = 'binary'):
 		if resType == 'icon' and not resourceName.endswith('.ico'):
 			resourceName += '.ico'
 
-	# On Mac, icns does not work with wxPython
-	if sys_str.startswith('Darwin'):
+	if sys_str.startswith('Darwin') or sys_str.startswith('Linux'):
 		if resType == 'icon' and not resourceName.endswith('.icns'):
 			resourceName += '.ico'
 
@@ -875,6 +943,10 @@ if __name__ == '__main__':
 	app = wx.App()
 	frame = MyFrame()
 	frame.Show(True)
+
+	# otherwise, it will not show up on Mac
+	frame.videoCRF.SetToolTip(u'建议取值18-28之间，数字越大，质量越差')
+	frame.videoExtra.SetToolTip(u'-r rate 帧率\n-vframes number 要转换的帧数量\n-movflags +faststart 首帧播放')
 
 	frame.videoEnabled.SetValue(wx.CHK_CHECKED)
 	frame.audioEnabled.SetValue(wx.CHK_CHECKED)
@@ -895,6 +967,7 @@ if __name__ == '__main__':
 	frame.audioReplace.Bind(wx.EVT_CHECKBOX,replaceAudio)
 	frame.overWrite.Bind(wx.EVT_CHECKBOX,updateCmd)
 	frame.constarinRatio.Bind(wx.EVT_CHECKBOX,updateVideoSize)
+	frame.firstFramePlay.Bind(wx.EVT_CHECKBOX,updateCmd)
 
 	frame.videoEncoder.Bind(wx.EVT_TEXT,updateCmd)
 	frame.videoEncoder.Bind(wx.EVT_COMBOBOX,updateCmd)
@@ -923,8 +996,8 @@ if __name__ == '__main__':
 	frame.audioExtra.Bind(wx.EVT_TEXT,updateCmd)
 	frame.audioExtra.Bind(wx.EVT_COMBOBOX,updateCmd)
 
-	frame.progressBar.Hide()
-	frame.remainTime.Hide()
+	# frame.progressBar.Hide()
+	# frame.remainTime.Hide()
 	
 	dt = MyFileDropTarget(frame)
 	frame.SetDropTarget(dt)
